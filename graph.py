@@ -1,6 +1,5 @@
 import numpy as np
 
-
 #throughout this project I represent derivitves as such, dy_dx = derivitve of y with respect to x
 #dl_ds means derivitve loss W.R.T the value of the nodes initial value
 
@@ -675,7 +674,7 @@ class AddInPlaceOneNode(node):
 
         return (dl_dp1,)
 
-class MatMulOutOfPlace(node):#this will do the matmul in the order of the first two parents.  Assumes that neither is greater than 3 dims, It might still work but numpy brodcasting idk?
+class MatMulOutOfPlace(node):#this will do the matmul in the order of the first two parents.
     def operate(self,parents_storages):
         left = parents_storages[0].get_data_forwards(self)
         right = parents_storages[1].get_data_forwards(self)
@@ -688,12 +687,14 @@ class MatMulOutOfPlace(node):#this will do the matmul in the order of the first 
         
             reshape the inputs and dl_ds to the mathmatical shape
                 -by adding the dummy dimentions that numpy would have used in the forwards pass
-                -and flattening extra dims into one batch dimention, in the same way numpy woudl have in the forwards pass (we have do mess about a bit with rights batch dimention to put it in the collums becasue numpy reshapes in row majour order)
-            then it finds the derivitive wrt right and left useing the normal method
             
-            note that in the case where they both have the same number of batch dims we dont fully flattern, we cheat a little and use the numpy batched multiplication, meaning we only flatten to 3 dims for the sake of makeing the transpose eaisier.
-            this flattening can be done becasue the rows in left, and the collums in right are inderpendant of eatch other, so the result of a multiplication involveing batch dims is the same no matter how mutch I flatten it as long as i preseve the collums / rows
-            this property arises form the definition of a matmul as concecutive tranformations, as where one baisis vector moves is inderpendant of where the other goes'''
+            if one array is 2d we can just flatten the other array and dl_ds's batch dims into one dimention, and then in the matmul with dl_ds the batch dims will natrualy sum, and we can reshape to regain the batch dims in the batched array
+                
+            flattening can be done becasue the rows in left, and the collums in right are inderpendant of eatch other, so the result of a multiplication involveing batch dims is the same no matter how mutch I flatten it as long as i preseve the collums / rows
+            this property arises form the definition of a matmul as concecutive liniar tranformations, as where one baisis vector moves is inderpendant of where the other goes
+            
+            if both array is >2d we will do the same thing as in element wise mul and the other multiplications, we will get the brodcast dims, calculate dl_right and left as normal, and then sum across the brodcasted dims to attian the true graidients
+            node that the final branch would work for any two numpy arrays, the first two branches only exist becasue I think there is something nice about the way that flattening into one big batch dim and then doing a matmul natrualy sums over the batch'''
 
 
         
@@ -703,12 +704,15 @@ class MatMulOutOfPlace(node):#this will do the matmul in the order of the first 
         right = parents_storages[1].get_data_backwards(self)
 
 
-
+        
         L_shape = np.shape(left)
         R_shape = np.shape(right)
         dl_ds_shape = np.shape(dl_ds)
         L_dims = len(L_shape)
         R_dims = len(R_shape)
+        #store this so that we can reshape derivitives to match the arrays, becasue we need the real shape
+        right_og_shape = R_shape
+        left_og_shape = L_shape
 
         #deal with 1D arrays
         left_is_reshaped = False
@@ -717,7 +721,6 @@ class MatMulOutOfPlace(node):#this will do the matmul in the order of the first 
         if L_dims == 1:
             left = np.reshape(left,(1,-1))#rehsape l to its mathmatical shape
             left_is_reshaped = True
-            left_og_shape = L_shape
             L_shape = np.shape(left)
             L_dims = 2
 
@@ -731,7 +734,6 @@ class MatMulOutOfPlace(node):#this will do the matmul in the order of the first 
         if R_dims == 1:
             right = np.reshape(right,(-1,1))
             right_is_reshaped = True
-            right_og_shape = R_shape
             R_shape = np.shape(right)
             R_dims = 2
 
@@ -742,29 +744,9 @@ class MatMulOutOfPlace(node):#this will do the matmul in the order of the first 
             dl_ds = np.reshape(dl_ds,dl_ds_shape)
             
 
-
-
-
         if L_dims == 2 and R_dims == 2:#normal matrix multiplication, no batching
             dl_dright = left.T @ dl_ds
             dl_dleft = dl_ds @ right.T
-
-        #batch matrix multiplication
-        elif L_dims == R_dims:#in this case numpy does batched multiplication, so we can flatten the batch dimentions into one so that transpose still works,
-
-            #flatten and transpose
-            #note that -1 will be the product of the batch dims, the reshape at the end will put us back into the same shape
-            left_flat = np.reshape(left,(-1,L_shape[-2],L_shape[-1]))
-            left_flat_T = np.swapaxes(left_flat,-1,-2)
-
-            right_flat = np.reshape(right,(-1,R_shape[-2],R_shape[-1]))
-            right_flat_T = np.swapaxes(right_flat,-1,-2)
-
-            dl_ds_flat = np.reshape(dl_ds,(-1,dl_ds_shape[-2],dl_ds_shape[-1]))
-
-            #get derivitives and reshape to put the batch dims back how they were
-            dl_dleft = np.reshape(dl_ds_flat @ right_flat_T,(L_shape))
-            dl_dright = np.reshape(left_flat_T @ dl_ds_flat,(R_shape))
 
         elif R_dims == 2:#only batching on the left dimention so right is shared across batches
             left_superflat = np.reshape(left,(-1,L_shape[-1]))
@@ -788,13 +770,35 @@ class MatMulOutOfPlace(node):#this will do the matmul in the order of the first 
             dl_ds_superflat_T = np.reshape(dl_ds_swapped , shape = (-1,dl_ds_shape[-2]))
             dl_ds_superflat = dl_ds_superflat_T.T#undo the transpose
 
+            #left dims are on the left
             dl_dleft = dl_ds_superflat @ right_superflat_T
 
             dl_dright =  left.T @ dl_ds
 
+        else:#neither array is 2d so we have to manualy sum over brodcast dims, this branch would work for arrays that fall into the preivious two cases, but I think there is something nice about the way that the matmul naturaly sums over batched dims when only one array is batched
+
+            L_brodcast_dims,R_brodcast_dims = get_brodcast_dims(L_shape,R_shape)
 
 
-        #reshape back to one-d to match left/right.dl_ds if a dummy dim was added to match mathmatical shape
+            left_T = np.swapaxes(left,-1,-2)
+            right_T = np.swapaxes(right,-1,-2)
+
+
+            #in these opereations left and right will brodcast to the shape they were during the operation, so dl_dleft/right will be derivitve loss wrt the brodcasted vertion of left and right 
+            dl_dleft = dl_ds @ right_T
+            dl_dright = left_T @ dl_ds
+
+            #sum over brodcasted dims, keepdims is true so that we preserve any dimentions of size 1 in the array
+            dl_dleft = np.sum(dl_dleft,axis = L_brodcast_dims,keepdims=True)
+            dl_dright = np.sum(dl_dright,axis = R_brodcast_dims,keepdims = True)
+
+            #set this to true so that the dims that were brodcasted across in one array that diddnt exist in the origonal will be eliminated in the reshape
+            #the later reshape is only to remove 1 dimentions that were added as padding in brodcasting
+            right_is_reshaped = True
+            left_is_reshaped = True
+
+        #reshape back to one-d to match left/right.dl_ds if a dummy/brodcasting dim was added to match mathmatical shape
+        #note that all that the reshape will do is remove dimentions of size one from the array, namely dummy dims added at the start to deal with 1D arrays, and any dims added during brodcasting
         if right_is_reshaped:
             dl_dright = np.reshape(dl_dright, right_og_shape)
         if left_is_reshaped:
