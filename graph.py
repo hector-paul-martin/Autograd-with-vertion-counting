@@ -887,7 +887,7 @@ class SoftmaxCrossEntropy(node):
 
 
     def derivitive(self,parent_storages):
-        dl_dp = self.probabilitys - self.true_distrabution
+        dl_dp = (self.probabilitys - self.true_distrabution) * self.dl_ds
 
         return(dl_dp,)
 
