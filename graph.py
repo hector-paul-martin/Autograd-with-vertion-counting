@@ -487,7 +487,7 @@ class ElementMulOneNodeOutOfPlace(node):
 
         #pad the shape to align the arrays from the right
         if mul_dims < parent_dims:
-            padded_mul_shape = (1,)* (parent_dims - mul_dims) + mul_dims
+            padded_mul_shape = (1,)* (parent_dims - mul_dims) + mul_shape
             result_dims = parent_dims
             padded_parent_shape = self.parent_shape
         else:#if they have equal number of dims they must be the same shape otherwise the operation would have failed
@@ -537,7 +537,7 @@ class ElementMulInPlace(node):
 
         #pad the shape to align the arrays from the right
         if mul_dims < parent_dims:
-            padded_mul_shape = (1,)* (parent_dims - mul_dims) + mul_dims
+            padded_mul_shape = (1,)* (parent_dims - mul_dims) + mul_shape
             result_dims = parent_dims
             padded_parent_shape = self.parent_shape
         else:#if they have equal number of dims they must be the same shape otherwise the operation would have failed
