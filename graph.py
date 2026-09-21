@@ -1,5 +1,6 @@
 import numpy as np
 
+
 #throughout this project I represent derivitves as such, dy_dx = derivitve of y with respect to x
 #dl_ds means derivitve loss W.R.T the value of the nodes initial value
 
@@ -266,11 +267,7 @@ class node:
         else:
             self.dl_ds = np.zeros_like(self.dl_ds)
     
-    def __getitem__(self, key):#
-
-        mask = np.ones_like(self.value())
-        mask[key] = 0
-         
+    def __getitem__(self, key):#  
         newnode = Slice((self,),key)
         return newnode
 
@@ -477,35 +474,15 @@ class ElementMulOneNodeOutOfPlace(node):
         if self.parent_shape == np.shape(self.multiplier):
             return (self.multiplier*self.dl_ds,)#this means no brodcasting has happended, and we can just return the graidients directly
 
-        #find the dims that p1 and p2 were brordcast across, so that we can sum across said dims for acurate grads.
-        brodcast_dims = []
+        #find the dims that p1 was brodcast across
+        brodcast_dims,_ = get_brodcast_dims(self.parent_shape,np.shape(self.multiplier))
 
 
-        mul_shape = np.shape(self.multiplier)
-        mul_dims = len(mul_shape)
-        parent_dims = len(self.parent_shape)
 
-        #pad the shape to align the arrays from the right
-        if mul_dims < parent_dims:
-            padded_mul_shape = (1,)* (parent_dims - mul_dims) + mul_shape
-            result_dims = parent_dims
-            padded_parent_shape = self.parent_shape
-        else:#if they have equal number of dims they must be the same shape otherwise the operation would have failed
-            padded_parent_shape = (1,)* (mul_dims - parent_dims) + self.parent_shape
-            result_dims = mul_dims
-            padded_mul_shape = mul_shape
+        dl_dp = np.sum(self.multiplier*self.dl_ds, axis = (tuple(brodcast_dims)))
 
-        
-        #find the dimentions the array was brodcast over
-        for i in range(result_dims):
-            if padded_parent_shape[i] == 1 and padded_mul_shape[i] != 1:
-                brodcast_dims.append(i)
-
-        
-
-
-        dl_dp = np.sum(self.multiplier*self.dl_ds,(tuple(brodcast_dims)))
         dl_dp = np.reshape(dl_dp,(self.parent_shape))
+
         return (dl_dp,)  
     
 class ElementMulInPlace(node):
@@ -527,31 +504,9 @@ class ElementMulInPlace(node):
         if self.parent_shape == np.shape(self.multiplier):
             return (self.multiplier*self.dl_ds,)#this means no brodcasting has happended, and we can just return the graidients directly
 
-        #find the dims that p1 and p2 were brordcast across, so that we can sum across said dims for acurate grads.
-        brodcast_dims = []
+        #find the dims that the parent was brodcast accross
+        brodcast_dims,_ = get_brodcast_dims(self.parent_shape,np.shape(self.multiplier))
 
-
-        mul_shape = np.shape(self.multiplier)
-        mul_dims = len(mul_shape)
-        parent_dims = len(self.parent_shape)
-
-        #pad the shape to align the arrays from the right
-        if mul_dims < parent_dims:
-            padded_mul_shape = (1,)* (parent_dims - mul_dims) + mul_shape
-            result_dims = parent_dims
-            padded_parent_shape = self.parent_shape
-        else:#if they have equal number of dims they must be the same shape otherwise the operation would have failed
-            padded_parent_shape = (1,)* (mul_dims - parent_dims) + self.parent_shape
-            result_dims = mul_dims
-            padded_mul_shape = mul_shape
-
-        
-        #find the dimentions the array was brodcast over
-        for i in range(result_dims):
-            if padded_parent_shape[i] == 1 and padded_mul_shape[i] != 1:
-                brodcast_dims.append(i)
-
-        
 
 
         dl_dp = np.sum(self.multiplier*self.dl_ds,tuple(brodcast_dims))
@@ -693,8 +648,7 @@ class MatMulOutOfPlace(node):#this will do the matmul in the order of the first 
             flattening can be done becasue the rows in left, and the collums in right are inderpendant of eatch other, so the result of a multiplication involveing batch dims is the same no matter how mutch I flatten it as long as i preseve the collums / rows
             this property arises form the definition of a matmul as concecutive liniar tranformations, as where one baisis vector moves is inderpendant of where the other goes
             
-            if both array is >2d we will do the same thing as in element wise mul and the other multiplications, we will get the brodcast dims, calculate dl_right and left as normal, and then sum across the brodcasted dims to attian the true graidients
-            node that the final branch would work for any two numpy arrays, the first two branches only exist becasue I think there is something nice about the way that flattening into one big batch dim and then doing a matmul natrualy sums over the batch'''
+            if both array is >2d we will do the same thing as in element wise mul and the other multiplications, we will get the brodcast dims, calculate dl_right and left as normal, and then sum across the brodcasted dims to attian the true graidients'''
 
 
         
@@ -775,7 +729,7 @@ class MatMulOutOfPlace(node):#this will do the matmul in the order of the first 
 
             dl_dright =  left.T @ dl_ds
 
-        else:#neither array is 2d so we have to manualy sum over brodcast dims, this branch would work for arrays that fall into the preivious two cases, but I think there is something nice about the way that the matmul naturaly sums over batched dims when only one array is batched
+        else:#neither array is 2d so we have to manualy sum over brodcast dims
 
             L_brodcast_dims,R_brodcast_dims = get_brodcast_dims(L_shape,R_shape)
 
@@ -808,17 +762,33 @@ class MatMulOutOfPlace(node):#this will do the matmul in the order of the first 
         
 class Summation(node):
     def operate(self,parent_storages,axis_keepdims):#expects axis keepdims to be (tuple of axis to sum over,wether or not keep dims) to sum over all axis input an empty tuple
+
         data = parent_storages[0].get_data_forwards(self)
+        #cache for backwards
+        self.parent_shape = np.shape(data)
+        self.axis = axis_keepdims[0]
+        self.keepdims = axis_keepdims[1]
 
         if axis_keepdims[0] == ():
             result = np.sum(data,keepdims=axis_keepdims[1])
         else:
             result = np.sum(data,axis=axis_keepdims[0],keepdims=axis_keepdims[1])
-
         return result
 
     def derivitive(self,parent_storages):
-        dl_dp = self.dl_ds
+        if type(self.axis) == int:
+            self.axis = (self.axis,)
+
+        #re-make shape of result
+        req_shape = list(self.parent_shape)
+        for dimention in self.axis:
+            req_shape[dimention] = 1
+
+
+        if not self.keepdims and self.axis != ():#if dimentions were preserved or all dims were summed across we can just use dl_dp directly as that will brodcast correctly
+            dl_dp = np.reshape(self.dl_ds,shape = tuple(req_shape))#add ones in dl_ds shape where the summation happened so that it will brodcast correctly
+        else:
+            dl_dp = self.dl_ds
 
         return (dl_dp,)#this will brodcast to the parents array so its fine
 
@@ -855,12 +825,14 @@ class Softmax(node):#applies the softmax function across the given axis
         self.axis = axis
         return result
 
-    def derivitive(self):
+    def derivitive(self,parent_storages):
         raise NotImplementedError('i havent implemented this yet, usualy softmax and corss entropy are used together anyway so just use that instead, only use this function for output')
 
 class SoftmaxCrossEntropy(node):
     def operate(self,parent_storages,axis_True_distrabution):#axis_true_distrabution should be a tuple with, the axis to do softmax + cross entopy over, and the 
-        'input should be format ((parent),(axis, true distabution))'
+        ''''input should be format ((parent),(axis, true distabution))
+        
+        note that this function preserves dimentions'''
         operation_axis = axis_True_distrabution[0]
         self.true_distrabution = axis_True_distrabution[1]
 
@@ -880,14 +852,20 @@ class SoftmaxCrossEntropy(node):
 
 
         #cross entropy-----------------------------------
-        result = np.sum(  -np.log(self.probabilitys) *self.true_distrabution  ,axis = operation_axis)
+        result = np.sum(  -np.log(self.probabilitys) *self.true_distrabution  ,axis = operation_axis,keepdims = True)
 
+
+        self.operation_axis = operation_axis#store for backwards pass
         return result
 
 
 
     def derivitive(self,parent_storages):
-        dl_dp = (self.probabilitys - self.true_distrabution) * self.dl_ds
+
+
+
+
+        dl_dp = (self.probabilitys - self.true_distrabution) *  self.dl_ds#since I did keepdims = True in forwards pass dl_ds will brodcast to the parent correctly
 
         return(dl_dp,)
 
@@ -972,3 +950,4 @@ class ReplaceValuesOneNode(node):
         dl_dbase *= self.dl_ds
 
         return (dl_dbase,)
+
