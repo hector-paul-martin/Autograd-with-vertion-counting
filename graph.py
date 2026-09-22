@@ -54,7 +54,7 @@ def backwards_pass(node_levels,loss_nodes:tuple):#loss nodes are the nodes whose
         raise RuntimeError('a gettitem was ran without assigning the result to a variable, after running a[index] = b you MUST run:  a = get_child_for_setitem((a,b)) to put the result of setitem in a')
 
     if type(loss_nodes) != tuple:# I keep forgeting to make loss nodes a tuple for some reson so I put this to remind myself
-        input('loss nodes should be a tuple!!!')
+        raise TypeError('loss nodes should be a tuple')
     
     #make los nodes dl_ds 1
     for node in loss_nodes:
@@ -97,8 +97,8 @@ def cleanup(node_levels):#deleats none root nodes and zeros grads and drops the 
 def empty_storages_node_dict(node_levels):
     'empties the storage objects node_dicts and resets the node.key to zero'
     for level in node_levels:
-        for node in level:
-            node.storage.node_dict = {}#reset to empty dict, this removes
+        for node_node in level:#use node_node just so that we can referacne the node class later
+            node_node.storage.node_dict = {}#reset to empty dict, this removes
 
     node.node_key = 0
 
@@ -185,8 +185,8 @@ class node:
             raise RuntimeError('a gettitem was ran without assigning the result to a variable, after running a[index] = b you MUST run:  a = get_child_for_setitem((a,b)) to put the result of setitem in a')
 
         self.parents = parents
-        self.key = self.node_key#node_key is the global counter. key is this nodes unique ID, used by storages node_dict during the backwards pass to look up the version recorded in the forwards pass.
-        self.node_key+=1 # incriment nodekey so that the next node wil have a unique key
+        self.key = node.node_key#node_key is the class wide counter. key is this nodes unique ID, used by storages node_dict during the backwards pass to look up the version recorded in the forwards pass.
+        node.node_key+=1 # incriment nodekey so that the next node wil have a unique key
 
         max_parent_level = 0
         parents_storages = []
@@ -731,8 +731,21 @@ class MatMulOutOfPlace(node):#this will do the matmul in the order of the first 
 
         else:#neither array is 2d so we have to manualy sum over brodcast dims
 
-            L_brodcast_dims,R_brodcast_dims = get_brodcast_dims(L_shape,R_shape)
+            L_batch_shape = L_shape[:-2]
+            R_batch_shape = R_shape[:-2]
 
+            L_brodcast_dims,R_brodcast_dims = get_brodcast_dims(L_batch_shape,R_batch_shape)
+
+            L_temp = []
+            R_temp = []
+
+            for dim in L_brodcast_dims:
+                L_temp.append(dim +2)
+            for dim in R_brodcast_dims:
+                R_temp.append(dim+2)
+            
+            L_brodcast_dims = tuple(L_temp)
+            R_brodcast_dims = tuple(R_temp)
 
             left_T = np.swapaxes(left,-1,-2)
             right_T = np.swapaxes(right,-1,-2)
@@ -799,7 +812,6 @@ class LeakyRelu(node):
         result = np.where(parent < 0, parent*alpha,parent)
 
         self.ds_dp = np.where(parent < 0 ,alpha, 1)  #this mask represents ds_dp, we can times it by dl_ds element wise to get dl_dp, make it now so that inplace ops on parent can be allowed
-        self.alpha = alpha
 
         return result
 
