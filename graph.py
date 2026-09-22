@@ -734,18 +734,7 @@ class MatMulOutOfPlace(node):#this will do the matmul in the order of the first 
             L_batch_shape = L_shape[:-2]
             R_batch_shape = R_shape[:-2]
 
-            L_brodcast_dims,R_brodcast_dims = get_brodcast_dims(L_batch_shape,R_batch_shape)
-
-            L_temp = []
-            R_temp = []
-
-            for dim in L_brodcast_dims:
-                L_temp.append(dim +2)
-            for dim in R_brodcast_dims:
-                R_temp.append(dim+2)
-            
-            L_brodcast_dims = tuple(L_temp)
-            R_brodcast_dims = tuple(R_temp)
+            L_brodcast_dims,R_brodcast_dims = get_brodcast_dims(L_shape,R_shape)
 
             left_T = np.swapaxes(left,-1,-2)
             right_T = np.swapaxes(right,-1,-2)
@@ -962,4 +951,5 @@ class ReplaceValuesOneNode(node):
         dl_dbase *= self.dl_ds
 
         return (dl_dbase,)
+
 
