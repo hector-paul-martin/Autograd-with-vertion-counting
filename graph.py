@@ -404,6 +404,7 @@ def get_brodcast_dims(p1_shape,p2_shape):
 
         return tuple(p1_brodcast_dims),tuple(p2_brodcast_dims)
 
+
 class Slice(node):
     def operate(self,parents_storages,index):
         self.index = index
@@ -411,11 +412,16 @@ class Slice(node):
         data = parents_storages[0].get_data_forwards(self)#use get data forwards to collect data from nodes
 
         self.base_shape = np.shape(data)#this can be stored safley as numpy arrays shapes cannot be changed in place
+        
+        result = data[index]
+
         return data[index]
 
     def derivitive(self,parent_storages):
         dl_dp = np.zeros(shape=self.base_shape)#create an array with identical dims to parent, and put derivitive from this node in
-        dl_dp[self.index] += self.dl_ds
+        
+        np.add.at(dl_dp, self.index, self.dl_ds) # use add.at so that the repeated indexing case is handled correctly
+        
         return (dl_dp,)#a tuple is expected
 
 
@@ -906,15 +912,29 @@ class ReplaceValues(node):
     def operate(self,parent_storages,index):
         base_array = parent_storages[0].get_data_forwards(self)
         ovewriting_array = parent_storages[1].get_data_forwards(self)
-
+        
         base_array[index] = ovewriting_array
+
+        #test if the array overworte, this is a weird thing to do, and allowing it would make the graidient calculation more complicated, so just raise error if there are repeats.
+        #it is still allowed with the one node vertion, because it only corrupts grads to overwite.
+
+        repeat_test_array = np.reshape(np.arange(base_array.size),shape = np.shape(base_array))#make an array of unique values in the same shape as the base
+
+        replaced = repeat_test_array[index]#get the values that were takes from test
+
+        if replaced.size != np.unique(replaced).size:#check if they were unique
+            raise RuntimeError('cannot do replace values with another node with repeated values as it will corrupt grads')
+
+
+        #cache for backwards
         self.index = index
         self.base_shape = np.shape(base_array)
+        self.overwrite_shape = np.shape(ovewriting_array)
 
         return base_array
 
     def derivitive(self,parent_storages):
-
+        
         dl_dbase = np.ones(shape=self.base_shape)
 
         dl_dbase[self.index] = 0
@@ -923,7 +943,15 @@ class ReplaceValues(node):
 
 
 
-        dl_doverwrite = self.dl_ds[self.index]
+        dl_doverwrite = self.dl_ds[self.index]#note that dl_ds has the same shape as the base array, so then dl_doverwrite[index] is the same shape as base_array[index]
+
+        #deal with brodcasting
+        gap_shape = np.shape(dl_doverwrite)#gap shapre refers to the shape of the gap that the array will try to fit into, witch is the shape of base_array[index], witch has the same shape as dl_doverwrite[index]
+        overwrite_brodcast_dims,_ = get_brodcast_dims(self.overwrite_shape,gap_shape)#gap shape will never have any brodcast dims, if it did there would have been an error in the forwards pass
+
+        #sum across batch dims and reshape to remove 1-dims
+        dl_doverwrite = np.sum(dl_doverwrite,axis = overwrite_brodcast_dims , keepdims=True)
+        dl_doverwrite = np.reshape(dl_doverwrite,shape=(self.overwrite_shape))
 
         return (dl_dbase,dl_doverwrite)
 
