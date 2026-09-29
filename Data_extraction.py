@@ -11,7 +11,7 @@ def extract_data_images(filename):
         
         #reshape to a format that the neural network takes, a list of flat images
         images = np.fromfile(f,dtype = np.uint8)
-        images = images.reshape(num_images,num_rows*num_rows)/255
+        images = images.reshape(num_images,num_rows*num_cols)/255
     return images
 
 def extract_data_labels(filename):
